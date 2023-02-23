@@ -27,7 +27,9 @@ contract Crowdfunding {
         minContribution = 100 wei;
         manager = msg.sender;
     }
-
+/*
+Check the total balance this contract has by calling this function
+*/
     function getBalance() public view returns (uint256) {
         return address(this).balance;
     }
@@ -65,7 +67,10 @@ contract Crowdfunding {
         require(contributors[msg.sender] > 0, "You are not contributor..");
         _;
     }
-
+/* 
+First connect your account which has balance and keep in mind that you 
+need to transfer minimum ammount of 1000 wei to be a contributor...
+*/
     function sendEth() public payable checkTime checkVal {
         if (contributors[msg.sender] == 0) {
             totcontributors++;
@@ -73,14 +78,19 @@ contract Crowdfunding {
         contributors[msg.sender] += msg.value;
         raisedAmount += msg.value;
     }
-
+/*
+Only Contributors can ask for refund and 
+only when the target is not acheived after the deadline..
+*/
     function refund() public timeToRefund checkCont {
         address payable user = payable(msg.sender);
         uint a = contributors[msg.sender];
         contributors[msg.sender] = 0;
         user.transfer(a);
     }
-
+/*
+Manager will create request for different recepients...
+*/
     function createRequests(
         string memory _description,
         address payable _recipients,
@@ -94,7 +104,10 @@ contract Crowdfunding {
         newRequest.completed = false;
         newRequest.totVoters = 0;
     }
-
+/*
+Only contributor can vote to the request and
+only one time contributor can vote...
+*/
     function voteRequest(uint256 _requestNo) public checkCont {
         Request storage thisRequest = request[_requestNo];
         require(
@@ -108,7 +121,10 @@ contract Crowdfunding {
         thisRequest.voters[msg.sender] = true;
         thisRequest.totVoters++;
     }
-
+/*
+Manager will fulfill the request only after deadline
+if the target is achieved otherwise no request would be completed....
+*/
     function makePay(uint256 _requestNo) public onlyManager timeToPay {
         Request storage thisRequest = request[_requestNo];
 
