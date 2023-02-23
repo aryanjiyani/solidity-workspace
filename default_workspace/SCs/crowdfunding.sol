@@ -76,8 +76,9 @@ contract Crowdfunding {
 
     function refund() public timeToRefund checkCont {
         address payable user = payable(msg.sender);
-        user.transfer(contributors[msg.sender]);
+        uint a = contributors[msg.sender];
         contributors[msg.sender] = 0;
+        user.transfer(a);
     }
 
     function createRequests(
