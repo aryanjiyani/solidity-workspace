@@ -86,7 +86,7 @@ contract Ecommerce {
         newOrder.buyer = msg.sender;
         newOrder.price = msg.value;
         newOrder.fees = msg.value/100;
-        newOrder.currency = 6;
+        newOrder.currency = tokenNumber;
         newOrder.status = false;
 
         emit FreshOrder(orderId, msg.value, msg.sender);
