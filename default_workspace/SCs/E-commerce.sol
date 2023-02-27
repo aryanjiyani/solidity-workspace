@@ -51,6 +51,8 @@ contract Ecommerce {
         tokenNumber++;
     }
     function doApprove(uint256 _amount, uint256 _tokenNumber) external returns(bool) {
+        require(_tokenNumber < tokenNumber, "This token is not supported");
+        
         uint256 _val = IERC20(token[_tokenNumber]).balanceOf(msg.sender);
         require(_val >= _amount, "You have not enough balance");
         
@@ -63,6 +65,8 @@ contract Ecommerce {
 
 // For Other TOKENs
     function createOrderbyToken(uint256 _tokenNumber) external {
+        require(_tokenNumber < tokenNumber, "This token is not supported");
+
         uint256 _allowedValue = IERC20(token[_tokenNumber]).allowance(msg.sender, address(this));
         require(_allowedValue >= 0, "You have not Allowed yet");
 
@@ -95,10 +99,12 @@ contract Ecommerce {
 
 
     function claim(uint256 _orderId) external onlyMerchant {
-        
+        require(_orderId < orderId, "This Order does not exist");
         Order storage thisOrder = orders[_orderId];
+
         require (thisOrder.status==false && thisOrder.price > 0, "This order is already canceles or claimed");
         uint256 toMerchant = thisOrder.price - thisOrder.fees;
+
         if(thisOrder.currency < tokenNumber) {
             bool toMerch = IERC20(token[tokenNumber]).transfer(merchant,toMerchant);
             bool toAdmin = IERC20(token[tokenNumber]).transfer(admin,thisOrder.fees);
@@ -120,8 +126,9 @@ contract Ecommerce {
     }
     
     function cancelOrder(uint256 _orderId) external {
-        
+        require(_orderId < orderId, "This Order does not exist");
         Order storage thisOrder = orders[_orderId];
+
         require(thisOrder.status==false,"This order is already completed or claimed");
         require(msg.sender==merchant || msg.sender==thisOrder.buyer, "You are not able to cacel order");
         
