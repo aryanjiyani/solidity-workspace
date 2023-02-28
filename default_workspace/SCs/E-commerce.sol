@@ -22,19 +22,19 @@ contract Ecommerce {
     address public admin;
     uint256 public paidBy; // 1 for buyer & 2 for merchant
 
-    mapping(uint256 => address) public token;
-    uint256 public tokenNumber;
+    mapping(address => uint256) public token;
+    uint256 public tokenNumber=1;
 
     struct Order {
         address buyer;
         uint256 price;
         uint256 fees;
-        // uint256 merchantId;
-        uint256 currency;
+        address currency;
         bool status;
     }
     mapping(uint256 => Order) public orders;
     uint256 public orderId;
+    
     event FreshOrder (uint256 orderId, uint256 price, address buyer);
     
     constructor(address _admin, uint256 _paidBy) {
@@ -46,115 +46,112 @@ contract Ecommerce {
         require(msg.sender == merchant, "You are not merchant");
         _;
     }
+    
     function addCurrency(address _token) external onlyMerchant{
-        token[tokenNumber] = _token;
+        token[_token] = tokenNumber;
         tokenNumber++;
     }
-    function doApprove(uint256 _amount, uint256 _tokenNumber) external returns(bool) {
-        require(_tokenNumber < tokenNumber, "This token is not supported");
-        
-        uint256 _val = IERC20(token[_tokenNumber]).balanceOf(msg.sender);
-        require(_val >= _amount, "You have not enough balance");
-        
-        bool _success = IERC20(token[_tokenNumber]).approve(address(this), _amount);
-        return _success;
-    }
-    function getBalance(address _adreess) public view returns (uint256) {
-        return _adreess.balance;
+    function delCurrency(address _token) external onlyMerchant {
+        token[_token] = 0;
     }
 
 // For Other TOKENs
-    function createOrderbyToken(uint256 _tokenNumber) external {
-        require(_tokenNumber < tokenNumber, "This token is not supported");
+    function createOrderbyToken(address _token, uint256 _orderId) external {
+        require(token[_token] != 0, "This token is not supported");
+        require(orders[_orderId].price != 0, "This orderId is already taken");
 
-        uint256 _allowedValue = IERC20(token[_tokenNumber]).allowance(msg.sender, address(this));
+        uint256 _allowedValue = IERC20(_token).allowance(msg.sender, address(this));
         require(_allowedValue >= 0, "You have not Allowed yet");
 
-        bool _success = IERC20(token[_tokenNumber]).transferFrom(msg.sender, address(this), _allowedValue);
+        Order storage newOrder = orders[_orderId];
+        bool _success = IERC20(_token).transferFrom(msg.sender, address(this), _allowedValue);
         require(_success==true, "Transaction is not done yet");
 
-        Order storage newOrder = orders[orderId];
         newOrder.buyer = msg.sender;
         newOrder.price = _allowedValue;
         newOrder.fees = _allowedValue/100;
-        newOrder.currency = _tokenNumber;
+        newOrder.currency = _token;
         newOrder.status = false;
         
         emit FreshOrder(orderId, _allowedValue, msg.sender);
-        orderId++;
+
     }
 // For ETH only
-    function createOrder() external payable {
-        
+    function createOrder(uint256 _orderId) external payable {
+        require(orders[_orderId].price != 0, "This orderId is already taken");
         Order storage newOrder = orders[orderId];
         newOrder.buyer = msg.sender;
         newOrder.price = msg.value;
         newOrder.fees = msg.value/100;
-        newOrder.currency = tokenNumber;
+        newOrder.currency = address(0);
         newOrder.status = false;
 
         emit FreshOrder(orderId, msg.value, msg.sender);
-        orderId++;
+        
     }
 
 
     function claim(uint256 _orderId) external onlyMerchant {
-        require(_orderId < orderId, "This Order does not exist");
+
+        require(orders[_orderId].price != 0 , "This Order does not exist");
         Order storage thisOrder = orders[_orderId];
 
-        require (thisOrder.status==false && thisOrder.price > 0, "This order is already canceles or claimed");
+        require (thisOrder.status==false, "This order is already canceles or claimed");
         uint256 toMerchant = thisOrder.price - thisOrder.fees;
 
-        if(thisOrder.currency < tokenNumber) {
-            bool toMerch = IERC20(token[tokenNumber]).transfer(merchant,toMerchant);
-            bool toAdmin = IERC20(token[tokenNumber]).transfer(admin,thisOrder.fees);
+        if(token[thisOrder.currency] != 0) {
+            bool toMerch = IERC20(thisOrder.currency).transfer(merchant,toMerchant);
+            bool toAdmin = IERC20(thisOrder.currency).transfer(admin,thisOrder.fees);
             if(toMerch && toAdmin){
                 thisOrder.status=true;
             }
             else {
-                thisOrder.status=false;
+                revert ("invalid order");
             }
         }
-        else if(thisOrder.currency==tokenNumber) {
+        else if(thisOrder.currency == address(0)) {
             address payable seller = payable(merchant);
             seller.transfer(toMerchant);
             address payable boss = payable(admin);
             boss.transfer(thisOrder.fees);
 
             thisOrder.status=true;
+        }else {
+            revert("Invalid order");
         }
     }
     
     function cancelOrder(uint256 _orderId) external {
-        require(_orderId < orderId, "This Order does not exist");
-        Order storage thisOrder = orders[_orderId];
 
-        require(thisOrder.status==false,"This order is already completed or claimed");
+        require(orders[_orderId].price != 0 , "This Order does not exist");
+
+        Order storage thisOrder = orders[_orderId];
         require(msg.sender==merchant || msg.sender==thisOrder.buyer, "You are not able to cacel order");
+        require(thisOrder.status==false,"This order is already completed or claimed");
         
         uint256 toBuyer = thisOrder.price - thisOrder.fees;
-        if(thisOrder.currency < tokenNumber) {
+        if(token[thisOrder.currency] != 0) {
             if(msg.sender == merchant) {
-                bool toUser = IERC20(token[tokenNumber]).transfer(thisOrder.buyer, thisOrder.price);
+                bool toUser = IERC20(thisOrder.currency).transfer(thisOrder.buyer, thisOrder.price);
                 if(toUser){
                     thisOrder.status=true;
                 }
                 else{
-                    thisOrder.status=false;
+                    revert ("invalid order");
                 }
             }
             else {
-                bool toUser = IERC20(token[tokenNumber]).transfer(thisOrder.buyer, toBuyer);
-                bool toAdmin = IERC20(token[tokenNumber]).transfer(admin,thisOrder.fees);
+                bool toUser = IERC20(thisOrder.currency).transfer(thisOrder.buyer, toBuyer);
+                bool toAdmin = IERC20(thisOrder.currency).transfer(admin,thisOrder.fees);
                 if(toUser && toAdmin){
                     thisOrder.status=true;
                 }
                 else{
-                    thisOrder.status=false;
+                    revert ("invalid order");
                 }
             }
         }
-        else if(thisOrder.currency==tokenNumber) {
+        else if(thisOrder.currency == address(0)) {
             address payable user = payable(thisOrder.buyer);
             if(msg.sender == merchant) {
                 user.transfer(thisOrder.price);
@@ -166,6 +163,11 @@ contract Ecommerce {
                 boss.transfer(thisOrder.fees);
                 thisOrder.status=true;
             }
+        }else {
+            revert ("invalid order");
         }
+    }
+    function getBalance(address _adreess) public view returns (uint256) {
+        return _adreess.balance;
     }
 }
