@@ -13,10 +13,8 @@ contract Ecommerce {
     address public merchant;
     address public admin;
     uint256 public paidBy; // 1 for buyer & 2 for merchant
-
     mapping(address => uint256) public token;
     uint256 public tokenNumber=1;
-
     struct Order {
         address buyer;
         uint256 price;
@@ -27,7 +25,10 @@ contract Ecommerce {
     mapping(uint256 => Order) public orders;
     uint256 public orderId;
     
-    event FreshOrder (uint256 orderId, uint256 price, address buyer);
+    event Ordered (uint256 orderId, uint256 price, address buyer);
+    event Token (address token, uint256 tokenNumber);
+    event Claimed (uint256 orderId, uint256 price, bool status);
+    event Canceled (uint256 orderId, uint256 price, bool status);
     
     constructor(address _admin, uint256 _paidBy) {
         admin = _admin;
@@ -41,10 +42,12 @@ contract Ecommerce {
     
     function addCurrency(address _token) external onlyMerchant{
         token[_token] = tokenNumber;
+        emit Token (_token, tokenNumber);
         tokenNumber++;
     }
     function delCurrency(address _token) external onlyMerchant {
         token[_token] = 0;
+        emit Token (_token, token[_token]);
     }
 
 // For Other TOKENs
@@ -64,9 +67,7 @@ contract Ecommerce {
         newOrder.fees = _allowedValue/100;
         newOrder.currency = _token;
         newOrder.status = false;
-        
-        emit FreshOrder(_orderId, _allowedValue, msg.sender);
-
+        emit Ordered(_orderId, _allowedValue, msg.sender);
     }
 // For ETH only
     function createOrder(uint256 _orderId) external payable {
@@ -78,7 +79,7 @@ contract Ecommerce {
         newOrder.currency = address(0);
         newOrder.status = false;
 
-        emit FreshOrder(_orderId, msg.value, msg.sender);
+        emit Ordered(_orderId, msg.value, msg.sender);
         
     }
 
@@ -91,22 +92,19 @@ contract Ecommerce {
         uint256 toMerchant = thisOrder.price - thisOrder.fees;
 
         if(token[thisOrder.currency] != 0) {
-            bool toMerch = IERC20(thisOrder.currency).transfer(merchant,toMerchant);
-            bool toAdmin = IERC20(thisOrder.currency).transfer(admin,thisOrder.fees);
-            if(toMerch && toAdmin){
-                thisOrder.status=true;
-            }
-            else {
-                revert ("invalid order");
-            }
-        }
-        else if(thisOrder.currency == address(0)) {
+            (bool success, bytes memory data) = thisOrder.currency.call(abi.encodeWithSignature("transfer(address,uint256)", merchant, toMerchant));
+            require(success && (data.length == 0 || abi.decode(data, (bool))), "ERROR : can't transfer");
+            (bool cool, bytes memory info) = thisOrder.currency.call(abi.encodeWithSignature("transfer(address,uint256)", admin, thisOrder.fees));
+            require(cool && (info.length == 0 || abi.decode(info, (bool))), "ERROR : can't transfer");
+            thisOrder.status=true;
+            emit Claimed (_orderId, thisOrder.price, thisOrder.status);
+        }else if(thisOrder.currency == address(0)) {
             address payable seller = payable(merchant);
             seller.transfer(toMerchant);
             address payable boss = payable(admin);
             boss.transfer(thisOrder.fees);
-
             thisOrder.status=true;
+            emit Claimed (_orderId, thisOrder.price, thisOrder.status);
         }else {
             revert("Invalid order");
         }
@@ -115,44 +113,40 @@ contract Ecommerce {
     function cancelOrder(uint256 _orderId) external {
 
         require(orders[_orderId].price != 0 , "This Order does not exist");
-
         Order storage thisOrder = orders[_orderId];
+
         require(msg.sender==merchant || msg.sender==thisOrder.buyer, "You are not able to cacel order");
         require(thisOrder.status==false,"This order is already completed or claimed");
         
         uint256 toBuyer = thisOrder.price - thisOrder.fees;
         if(token[thisOrder.currency] != 0) {
             if(msg.sender == merchant) {
-                bool toUser = IERC20(thisOrder.currency).transfer(thisOrder.buyer, thisOrder.price);
-                if(toUser){
-                    thisOrder.status=true;
-                }
-                else{
-                    revert ("invalid order");
-                }
+                (bool success, bytes memory data) = thisOrder.currency.call(abi.encodeWithSignature("transfer(address,uint256)", thisOrder.buyer, thisOrder.price));
+                require(success && (data.length == 0 || abi.decode(data, (bool))), "ERROR : can't transfer");
+                thisOrder.status=true;
+                emit Canceled (_orderId, thisOrder.price, thisOrder.status);
             }
             else {
-                bool toUser = IERC20(thisOrder.currency).transfer(thisOrder.buyer, toBuyer);
-                bool toAdmin = IERC20(thisOrder.currency).transfer(admin,thisOrder.fees);
-                if(toUser && toAdmin){
-                    thisOrder.status=true;
-                }
-                else{
-                    revert ("invalid order");
-                }
+                (bool success, bytes memory data) = thisOrder.currency.call(abi.encodeWithSignature("transfer(address,uint256)", thisOrder.buyer, toBuyer));
+                require(success && (data.length == 0 || abi.decode(data, (bool))), "ERROR : can't transfer");
+                (bool cool, bytes memory info) = thisOrder.currency.call(abi.encodeWithSignature("transfer(address,uint256)", admin, thisOrder.fees));
+                require(cool && (info.length == 0 || abi.decode(info, (bool))), "ERROR : can't transfer");
+                thisOrder.status=true;
+                emit Canceled (_orderId, thisOrder.price, thisOrder.status);
             }
-        }
-        else if(thisOrder.currency == address(0)) {
+        }else if(thisOrder.currency == address(0)) {
             address payable user = payable(thisOrder.buyer);
             if(msg.sender == merchant) {
                 user.transfer(thisOrder.price);
                 thisOrder.status=true;
+                emit Canceled (_orderId, thisOrder.price, thisOrder.status);
             }
             else {
                 address payable boss = payable(admin);
                 user.transfer(toBuyer);
                 boss.transfer(thisOrder.fees);
                 thisOrder.status=true;
+                emit Canceled (_orderId, thisOrder.price, thisOrder.status);
             }
         }else {
             revert ("invalid order");
