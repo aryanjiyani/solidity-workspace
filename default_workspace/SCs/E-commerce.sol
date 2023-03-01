@@ -1,13 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity >=0.5.0 <0.9.0;
-
-// mapping(0 => 0xdAC17F958D2ee523a2206206994597C13D831ec7) public USDT;
-// mapping(1 => 0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599) public WBTC;
-// mapping(2 => 0x4f3AfEC4E5a3F2A6a1A411DEF7D7dFe50eE057bF) public DGX;
-// mapping(3 => 0xFA1a856Cfa3409CFa145Fa4e20Eb270dF3EB21ab) public IOST;
-// mapping(4 => 0x514910771AF9Ca656af840dff83E8264EcF986CA) public LINK;
-// mapping(5 => 0xB8c77482e45F1F44dE1745F52C74426C631bDD52) public BNB;
-
 interface IERC20 {
     function balanceOf(address account) external view returns (uint256);
     function allowance(address owner, address spender) external view returns (uint256);
@@ -58,14 +50,14 @@ contract Ecommerce {
 // For Other TOKENs
     function createOrderbyToken(address _token, uint256 _orderId) external {
         require(token[_token] != 0, "This token is not supported");
-        require(orders[_orderId].price != 0, "This orderId is already taken");
+        require(orders[_orderId].price == 0, "This orderId is already taken");
 
         uint256 _allowedValue = IERC20(_token).allowance(msg.sender, address(this));
         require(_allowedValue >= 0, "You have not Allowed yet");
 
         Order storage newOrder = orders[_orderId];
-        bool _success = IERC20(_token).transferFrom(msg.sender, address(this), _allowedValue);
-        require(_success==true, "Transaction is not done yet");
+        (bool success, bytes memory data) = _token.call(abi.encodeWithSignature("transferFrom(address,address,uint256)", msg.sender, address(this), _allowedValue));
+        require(success && (data.length == 0 || abi.decode(data, (bool))), "ERROR : can't transfer");
 
         newOrder.buyer = msg.sender;
         newOrder.price = _allowedValue;
@@ -73,23 +65,22 @@ contract Ecommerce {
         newOrder.currency = _token;
         newOrder.status = false;
         
-        emit FreshOrder(orderId, _allowedValue, msg.sender);
+        emit FreshOrder(_orderId, _allowedValue, msg.sender);
 
     }
 // For ETH only
     function createOrder(uint256 _orderId) external payable {
-        require(orders[_orderId].price != 0, "This orderId is already taken");
-        Order storage newOrder = orders[orderId];
+        require(orders[_orderId].price == 0, "This orderId is already taken");
+        Order storage newOrder = orders[_orderId];
         newOrder.buyer = msg.sender;
         newOrder.price = msg.value;
         newOrder.fees = msg.value/100;
         newOrder.currency = address(0);
         newOrder.status = false;
 
-        emit FreshOrder(orderId, msg.value, msg.sender);
+        emit FreshOrder(_orderId, msg.value, msg.sender);
         
     }
-
 
     function claim(uint256 _orderId) external onlyMerchant {
 
