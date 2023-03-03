@@ -30,6 +30,8 @@ contract Ecommerce {
     event Claimed (uint256 orderId, uint256 price, bool status);
     event Canceled (uint256 orderId, uint256 price, bool status);
     
+    // Remove the struct and try to depend on one variable for mitigate th usage of gas
+    
     constructor(address _admin, uint256 _paidBy) {
         admin = _admin;
         paidBy = _paidBy;
