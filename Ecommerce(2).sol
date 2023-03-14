@@ -1,262 +1,319 @@
-    // SPDX-License-Identifier: GPL-3.0
+// SPDX-License-Identifier: GPL-3.0
 pragma solidity >=0.5.0 <0.9.0;
 
-contract Ecommerce {
-    address public seller; // Deployer
-    address public admin; // superAdmin (default)
-    address public affiliator; // previous seller
-    uint256 public fees; // in percentage
-    uint256 public affiliationFees; // in percentage
-    uint256 public feesPaidBy; // 1-buyer & 2-seller
+contract Escrow {
+    address public admin; // Deployer
+    address public superAdmin; // default from Factory
+    address public arbitrator; // default from Factory
+    address public affiliator; // default from Factorty
+    uint256 public OneMinSec; // calcuted one day seconds
     enum Status {
-        NotExist, Initiated, 
-        CancelbySeller, CancelbyBuyer,
-        ConfirmBySeller, ConfirmByBuyer, 
-        inDelivery, Delivered,
-        SettlementRequestedByBuyer, SettlementRequestedBySeller,
-        SettlementRejectByBuyer, SettlementRejectBySeller, 
-        InspectionRequested, inInspection, InspectionExtended,
-        Settled, Locked, Completed,     
-        ClaimedBySeller, ClaimedByAdmin
+        Initiated,
+        Canceled,
+        Delivered,
+        Completed,
+        ExtendedRequest,
+        InspectionExtended,
+        SettlementRequested,
+        Settled,
+        Arbitrator,
+        Claimed
     }
     struct Order {
         address buyer;
-        uint256 price;
+        address token;
+        uint256 amount;
+        uint256 confirmOrderTime;
+        Status status;
     }
-    mapping(address => mapping(bytes32 => Order)) public orders;
-    mapping(bytes32 => Status) public status;
-    bytes32 public orderId;
-    mapping(address => bool) public supportedTokens;
-    event newOrder(bytes32 orderId);
+    struct Token {
+        uint256 trx_fees;
+        uint256 aff_fees;
+        bool status;
+    }
+    struct Settlement {
+        uint256 percentage;
+        bool settlementBy;
+        uint256 RequestTime;
+    }
     
-    constructor(address _admin, address _Affiliator, uint256 _fees,uint256 _affiliationFees, uint256 _feesPaidBy) {
-        admin = _admin;
+    mapping(uint256 => Order) public orders;
+    mapping(address => Token) public tokens;
+
+    mapping(uint256 => Settlement) public settlementReq;
+    event newOrder(uint256 orderId);
+    uint256 public orderId;
+    uint256 WithdrawalPeriod;
+    uint256 EstDelivery;
+    uint256 InspPeriod;
+    uint256 InspExtperiod;
+    uint256 ReqRepPeriod;
+
+    constructor(
+        address _admin,
+        address _Affiliator,
+        address _Arbitrator,
+        uint256 _WithdrawalPeriod,
+        uint256 _EstDelivery,
+        uint256 _InspPeriod,
+        uint256 _IEperiod
+    ) {
+        superAdmin = _admin;
         affiliator = _Affiliator;
-        fees = _fees;
-        affiliationFees = _affiliationFees;
-        feesPaidBy = _feesPaidBy;
-        seller = msg.sender;
+        arbitrator = _Arbitrator;
+        admin = msg.sender;
+        WithdrawalPeriod = _WithdrawalPeriod;
+        EstDelivery = _EstDelivery;
+        InspPeriod = _InspPeriod;
+        InspExtperiod = _IEperiod;
+        OneMinSec = 60; // seconds
     }
+
     modifier onlySeller() {
-        require(msg.sender == seller, "You are not seller");
+        require(msg.sender == admin, "You are not seller");
         _;
     }
     modifier onlyAdmin() {
-        require(msg.sender == admin, "You are not admin");
+        require(msg.sender == superAdmin, "You are not admin");
         _;
     }
+    modifier ValidToken(address _token) {
+        require (tokens[_token].status==true, "Invalid Token");
+        _;
+    }
+    modifier ValidOrder(uint256 _orderId) {
+        require(orders[_orderId].buyer == address(0),  "This order is taken");
+        _;
+    }
+    modifier onlyBuyer(uint256 _orderId) {
+        require(orders[_orderId].buyer == msg.sender, "You are not Buyer of this order");
+        _;
+    }
+
     function addSupportedToken(address _token) external onlySeller {
-        supportedTokens[_token] = true;
+        tokens[_token] = Token({
+            trx_fees: 1,
+            aff_fees: 30,
+            status: true
+        });
     }
     function removeSupportedToken(address _token) external onlySeller {
-        supportedTokens[_token] = false;
-    }
-    
-    function createOrderbyToken(address _token,bytes32 _orderId, uint256 _orderAmount) external {
-        (bool success, bytes memory data) = _token.call(abi.encodeWithSignature("transferFrom(address,address,uint256)",
-        msg.sender, address(this), _orderAmount));
-        require(success && (data.length == 0 || abi.decode(data, (bool))), "ERROR: can't transfer");
-
-        require(orders[_token][_orderId].buyer == address(0), "This orderId is already used");
-
-        orders[_token][_orderId] = Order({
-            buyer: msg.sender,
-            price: _orderAmount
+        tokens[_token] = Token({
+            trx_fees: 1,
+            aff_fees: 30,
+            status: false
         });
-        status[_orderId] = Status.Initiated;
+    }
+
+    function createOrderbyToken(address _token,uint256 _orderId,uint256 _orderAmount) 
+    external ValidOrder(_orderId) ValidToken(_token) {
+        (bool success, bytes memory data) = _token.call(abi.encodeWithSignature(
+                "transferFrom(address,address,uint256)",
+                msg.sender,
+                address(this),
+                _orderAmount));
+        require(success && (data.length == 0 || abi.decode(data, (bool))),"ERROR: can't transfer");
+        orders[_orderId] = Order({
+            buyer: msg.sender,
+            token: _token,
+            amount: _orderAmount,
+            confirmOrderTime: 0,
+            status: Status.Initiated
+        });
+        emit newOrder(_orderId);
+    }
+    function createOrder(uint256 _orderId) external ValidOrder(_orderId) payable {
+        require(orders[_orderId].buyer == address(0),"This orderId is already used");
+        orders[_orderId] = Order({
+            buyer: msg.sender,
+            token: address(0),
+            amount: msg.value,
+            confirmOrderTime: 0,
+            status: Status.Initiated
+        });
         emit newOrder(_orderId);
     }
 
-    function createOrder(bytes32 _orderId) external payable {
-        require(orders[address(0)][_orderId].buyer == address(0), "This orderId is already used");
-
-        orders[address(0)][_orderId] = Order({
-            buyer: msg.sender,
-            price: msg.value
-        });
-        status[_orderId] = Status.Initiated;
-        emit newOrder(_orderId);
-    }
-    
-    function cancelOrderbyToken(address _token, bytes32 _orderId) external {
-        if(msg.sender == seller) {
-            require(status[_orderId] == Status.Initiated, "This order can not be caneled");
-
-            (bool success, bytes memory data) = _token.call(abi.encodeWithSignature("transfer(address,uint256)",
-            orders[_token][_orderId].buyer, orders[_token][_orderId].price));
-            require(success && (data.length == 0 || abi.decode(data, (bool))), "ERROR: can't transfer");
-            status[_orderId] = Status.CancelbySeller;
+    function cancelOrderbyToken(uint256 _orderId) external {
+        if(orders[_orderId].token == address(0)) {
+            if (msg.sender == admin) {
+                address payable user = payable(orders[_orderId].buyer);
+                    user.transfer(orders[_orderId].amount);
+                    orders[_orderId].status = Status.Canceled;
+            } else if (
+                orders[_orderId].buyer == msg.sender &&
+                orders[_orderId].status == Status.Initiated
+            ) {
+                address payable user = payable(orders[_orderId].buyer);
+                user.transfer(orders[_orderId].amount);
+                orders[_orderId].status = Status.Canceled;
+            } else {
+                revert("forbiden");
+            }
+        } else if(tokens[orders[_orderId].token].status) {
+            if (msg.sender == admin) {
+                (bool success, bytes memory data) = orders[_orderId].token.call(abi.encodeWithSignature(
+                        "transfer(address,uint256)",
+                        orders[_orderId].buyer,
+                        orders[_orderId].amount));
+                require(success && (data.length == 0 || abi.decode(data, (bool))),"ERROR: can't transfer");
+                orders[_orderId].status = Status.Canceled;
+            } else if (
+                orders[_orderId].buyer == msg.sender &&
+                orders[_orderId].status == Status.Initiated) {
+                (bool success, bytes memory data) = orders[_orderId].token.call(abi.encodeWithSignature(
+                        "transfer(address,uint256)",
+                        orders[_orderId].buyer,
+                        orders[_orderId].amount));
+                require(success && (data.length == 0 || abi.decode(data, (bool))),"ERROR: can't transfer");
+                orders[_orderId].status = Status.Canceled;
+            } else {
+            revert("forbiden");
+            }
         }else {
-            require(orders[_token][_orderId].buyer == msg.sender && status[_orderId] == Status.Initiated, "This orderId is already used");
-            
-            uint256 charge = orders[_token][_orderId].price - (orders[_token][_orderId].price * fees / 100);
-            uint256 toBuyer = orders[_token][_orderId].price - charge;
-            uint256 toAffiliater = charge - (charge * affiliationFees / 100);
-
-            (bool success, bytes memory data) = _token.call(abi.encodeWithSignature("transfer(address,uint256)",
-            msg.sender, toBuyer));
-            require(success && (data.length == 0 || abi.decode(data, (bool))), "ERROR: can't transfer");
-
-            (bool cool, bytes memory info) = _token.call(abi.encodeWithSignature("transfer(address,uint256)",
-            admin, charge - toAffiliater));
-            require(cool && (info.length == 0 || abi.decode(info, (bool))), "ERROR: can't transfer");
-
-            (bool fool, bytes memory fnfo) = _token.call(abi.encodeWithSignature("transfer(address,uint256)",
-            affiliator, toAffiliater));
-            require(fool && (fnfo.length == 0 || abi.decode(fnfo, (bool))), "ERROR: can't transfer");
-
-            status[_orderId] = Status.CancelbyBuyer;
-        }
-    }
-    function cancelOrder(bytes32 _orderId) external {
-        if(msg.sender == seller) {
-            require(status[_orderId] == Status.Initiated, "This order can not be caneled");
-            address payable user = payable(orders[address(0)][_orderId].buyer);
-            user.transfer(orders[address(0)][_orderId].price);
-
-            status[_orderId] = Status.CancelbySeller;
-        }else {
-            require(orders[address(0)][_orderId].buyer == msg.sender && status[_orderId] == Status.Initiated, "This orderId is already used");
-            uint256 charge = orders[address(0)][_orderId].price - (orders[address(0)][_orderId].price * fees / 100);
-            uint256 toBuyer = orders[address(0)][_orderId].price - charge;
-            uint256 toAffiliater = charge - (charge * affiliationFees / 100);
-
-            address payable user = payable(orders[address(0)][_orderId].buyer);
-            address payable superAdmin = payable(admin);
-            address payable commision = payable(affiliator);
-
-            user.transfer(toBuyer);
-            superAdmin.transfer(charge - toAffiliater);
-            commision.transfer(toAffiliater); 
-
-            status[_orderId] = Status.CancelbyBuyer;
+            revert("fprbidden");
         }
     }
 
-    function ConfirmBySeller(address _token, bytes32 _orderId) external onlySeller {
-        require(status[_orderId] == Status.Initiated);
-
-        status[_orderId] = Status.ConfirmBySeller;
-    }
-    function settlementBySeller(address _token, bytes32 _orderId, uint256 _percentage) external  onlySeller {
-        require(status[_orderId] == Status.Initiated);
-        
-        status[_orderId] = Status.SettlementRequestedBySeller;
-    }
-    function inspectionStart(address _token, bytes32 _orderId) external onlySeller {
-        require(status[_orderId] == Status.Delivered);
-        
-        status[_orderId] = Status.inInspection;
-    }
-    function extendInspection(address _token, bytes32 _orderId) external onlySeller {
-        require(status[_orderId] == Status.inInspection);
-        
-        status[_orderId] = Status.InspectionExtended;
-    }
-
-    
-    function ConfirmByBuyer(address _token, bytes32 _orderId) external  {
-        require(orders[_token][_orderId].buyer == msg.sender && status[_orderId] == Status.Initiated);
-
-        status[_orderId] = Status.ConfirmByBuyer;
-    }
-    function settlementByByer(address _token, bytes32 _orderId, uint256 _percentage) external {
-        require(orders[_token][_orderId].buyer == msg.sender && status[_orderId] == Status.Initiated);
-        
-        status[_orderId] = Status.SettlementRequestedByBuyer;
-    }
-    function requestExtension(address _token, bytes32 _orderId) external {
-        require(orders[_token][_orderId].buyer == msg.sender && status[_orderId] == Status.inInspection);
-        
-        status[_orderId] = Status.InspectionRequested;
-    }
-    function approveByBuyer(address _token, bytes32 _orderId) external {
-        require(orders[_token][_orderId].buyer == msg.sender && status[_orderId] == Status.SettlementRequestedBySeller);
-        
-        status[_orderId] = Status.Settled;
+    function settlementRequest(uint256 _orderId, uint256 _percentage) external {
+        if (msg.sender == admin) {
+            settlementReq[_orderId] = Settlement({
+                percentage: _percentage,
+                settlementBy: true,
+                RequestTime: block.timestamp
+            });
+            orders[_orderId].status = Status.SettlementRequested;
+        } else if (orders[_orderId].buyer == msg.sender) {
+            settlementReq[_orderId] = Settlement({
+                percentage: _percentage,
+                settlementBy: false,
+                RequestTime: block.timestamp
+            });
+            orders[_orderId].status = Status.SettlementRequested;
+        } else {
+            revert("forbidden");
+        }
     }
 
-    function rejectByBuyer(address _token, bytes32 _orderId) external {
-        require(orders[_token][_orderId].buyer == msg.sender && status[_orderId] == Status.SettlementRequestedBySeller);
-        
-        status[_orderId] = Status.SettlementRejectByBuyer;
+    function approveByBuyer(uint256 _orderId) external onlyBuyer (_orderId) {
+        require(settlementReq[_orderId].settlementBy == true);
+        uint256 refund = (orders[_orderId].amount * settlementReq[_orderId].percentage) / 100;
+        (bool success, bytes memory data) = orders[_orderId].token.call(abi.encodeWithSignature(
+                "transfer(address,uint256)",
+                msg.sender,
+                refund));
+        require(success && (data.length == 0 || abi.decode(data, (bool))),"ERROR: can't transfer");
+        (bool adSuccess, bytes memory adData) = orders[_orderId].token.call(abi.encodeWithSignature(
+                "transfer(address,uint256)",
+                admin,
+                orders[_orderId].amount - refund));
+        require(adSuccess && (adData.length == 0 || abi.decode(adData, (bool))),"ERROR: can't transfer");
+        orders[_orderId].status = Status.Settled;
+    }
+    function approveBySeller(uint256 _orderId) external onlySeller {
+        require(settlementReq[_orderId].settlementBy == false);
+        uint256 refund = (orders[_orderId].amount * settlementReq[_orderId].percentage) / 100;
+        (bool success, bytes memory data) = orders[_orderId].token.call(abi.encodeWithSignature(
+                "transfer(address,uint256)",
+                msg.sender,
+                refund));
+        require(success && (data.length == 0 || abi.decode(data, (bool))),"ERROR: can't transfer");
+        (bool adSuccess, bytes memory adData) = orders[_orderId].token.call(abi.encodeWithSignature(
+                "transfer(address,uint256)",
+                admin,
+                orders[_orderId].amount - refund));
+        require(adSuccess && (adData.length == 0 || abi.decode(adData, (bool))),"ERROR: can't transfer");
+        orders[_orderId].status = Status.Settled;
     }
 
-    function approveExtension(address _token, bytes32 _orderId) external onlySeller {
-        require(status[_orderId] == Status.inInspection);
-        
-        status[_orderId] = Status.InspectionExtended;
+    function rejectByBuyer(uint256 _orderId) external onlyBuyer(_orderId) {
+        require(settlementReq[_orderId].settlementBy == true);
+        orders[_orderId].status = Status.Initiated;
     }
-    function approveBySeller(address _token, bytes32 _orderId) external onlySeller {
-        require(status[_orderId] == Status.SettlementRequestedByBuyer);
-        
-        status[_orderId] = Status.Settled;
+    function rejectBySeller(uint256 _orderId) external onlySeller {
+        require(settlementReq[_orderId].settlementBy == false);
+        orders[_orderId].status = Status.Initiated;
+    }
+    function requestExtension(uint256 _orderId) external onlyBuyer(_orderId) {
+        orders[_orderId].status = Status.ExtendedRequest;
     }
 
-    function rejectBySeller(address _token, bytes32 _orderId) external onlySeller {
-        require(status[_orderId] == Status.SettlementRequestedByBuyer);
-        
-        status[_orderId] = Status.SettlementRejectBySeller;
+    function approveExtension(uint256 _orderId) external onlySeller {
+        require(orders[_orderId].status == Status.ExtendedRequest, "There is no request of extension");
+        orders[_orderId].status = Status.InspectionExtended;
     }
-    
+    function extendInspection(uint256 _orderId) external onlySeller {
+        require(block.timestamp >=
+                orders[_orderId].confirmOrderTime +
+                    (OneMinSec * EstDelivery) +
+                    (OneMinSec * InspPeriod),
+                "in inspection");
+        orders[_orderId].status = Status.InspectionExtended;
+    }
 
-    function claimOrder(address _token, bytes32 _orderId) external onlySeller {
-        require(status[_orderId] == Status.ConfirmByBuyer, "This order can not be caneled");
-        if(supportedTokens[_token]) {
+    function claimOrder(uint256 _orderId) external onlySeller {
+        require(orders[_orderId].status == Status.Completed, "This order can not be caneled");
+        if (tokens[orders[_orderId].token].status) {
+            // uint256 charge = orders[_orderId].amount - (orders[_orderId].amount / (1+fees/100)); 
+            // uint256 toAffiliater = charge - ((charge * affiliationFees) / 100);
+            uint256 charge = orders[_orderId].amount - ((orders[_orderId].amount * tokens[orders[_orderId].token].trx_fees) / 100);
+            uint256 toAffiliater = charge - ((charge * tokens[orders[_orderId].token].aff_fees) / 100);
+            (bool success, bytes memory data) = orders[_orderId].token.call(abi.encodeWithSignature(
+                    "transfer(address,uint256)",
+                    admin,
+                    orders[_orderId].amount - charge));
+            require(success && (data.length == 0 || abi.decode(data, (bool))),"ERROR: can't transfer");
+            (bool cool, bytes memory info) = orders[_orderId].token.call(abi.encodeWithSignature(
+                    "transfer(address,uint256)",
+                    superAdmin,
+                    charge));
+            require(cool && (info.length == 0 || abi.decode(info, (bool))),"ERROR: can't transfer");
+            (bool fool, bytes memory fnfo) = orders[_orderId].token.call(abi.encodeWithSignature(
+                    "transfer(address,uint256)",
+                    affiliator,
+                    toAffiliater));
+            require(fool && (fnfo.length == 0 || abi.decode(fnfo, (bool))),"ERROR: can't transfer");
+            orders[_orderId].status = Status.Claimed;
+        } else if (orders[_orderId].token == address(0)) {
+            uint256 charge = orders[_orderId].amount - ((orders[_orderId].amount * tokens[orders[_orderId].token].trx_fees) / 100);
+            uint256 toAffiliater = charge - ((charge * tokens[orders[_orderId].token].aff_fees) / 100);
 
-            uint256 charge = orders[_token][_orderId].price - (orders[_token][_orderId].price * fees / 100);
-            uint256 toAffiliater = charge - (charge * affiliationFees / 100);
-
-            (bool success, bytes memory data) = _token.call(abi.encodeWithSignature("transfer(address,uint256)",
-            seller, orders[_token][_orderId].price - charge));
-            require(success && (data.length == 0 || abi.decode(data, (bool))), "ERROR: can't transfer");
-
-            (bool cool, bytes memory info) = _token.call(abi.encodeWithSignature("transfer(address,uint256)",
-            admin, charge));
-            require(cool && (info.length == 0 || abi.decode(info, (bool))), "ERROR: can't transfer");
-
-            (bool fool, bytes memory fnfo) = _token.call(abi.encodeWithSignature("transfer(address,uint256)",
-            affiliator, toAffiliater));
-            require(fool && (fnfo.length == 0 || abi.decode(fnfo, (bool))), "ERROR: can't transfer");
-
-            status[_orderId] = Status.ClaimedBySeller;
-        }else if(_token == address(0)) {
-
-            uint256 charge = orders[address(0)][_orderId].price - (orders[address(0)][_orderId].price * fees / 100);
-            uint256 toAffiliater = charge - (charge * affiliationFees / 100);
-
-            address payable merchant = payable(seller);
-            address payable superAdmin = payable(admin);
+            address payable seller = payable(admin);
+            address payable Admin = payable(superAdmin);
             address payable commision = payable(affiliator);
 
-            merchant.transfer(orders[address(0)][_orderId].price - charge);
-            superAdmin.transfer(charge - toAffiliater);
+            seller.transfer(orders[_orderId].amount - charge);
+            Admin.transfer(charge - toAffiliater);
             commision.transfer(toAffiliater);
-            status[_orderId] = Status.ClaimedBySeller;
+            orders[_orderId].status = Status.Claimed;
         }
     }
-    
-    function finalClaim(address _token, bytes32 _orderId) external onlyAdmin {
-        require(status[_orderId] == Status.Completed);
-        if(_token == address(0)) {
-            address payable superAdmin = payable(admin);
-            superAdmin.transfer(orders[address(0)][_orderId].price);
-        }else{
-            (bool success, bytes memory data) = _token.call(abi.encodeWithSignature("transfer(address,uint256)",
-            admin, orders[_token][_orderId].price));
-            require(success && (data.length == 0 || abi.decode(data, (bool))), "ERROR: can't transfer");
+
+    function finalClaim(uint256 _orderId) external onlyAdmin {
+        require(orders[_orderId].status == Status.Completed);
+        if (orders[_orderId].token == address(0)) {
+            address payable Admin = payable(superAdmin);
+            Admin.transfer(orders[_orderId].amount);
+        } else {
+            (bool success, bytes memory data) = orders[_orderId].token.call(abi.encodeWithSignature(
+                    "transfer(address,uint256)",
+                    superAdmin,
+                    orders[_orderId].amount));
+            require(success && (data.length == 0 || abi.decode(data, (bool))),"ERROR: can't transfer");
         }
     }
-    function toArbitrator(address _token, bytes32 _orderId) external {
-        require(msg.sender == seller && msg.sender == orders[_token][_orderId].buyer);
-        
-        if(_token == address(0)) {
-            address payable Arbitrator = payable(admin);
-            Arbitrator.transfer(orders[address(0)][_orderId].price);
-        }else{
-        (bool success, bytes memory data) = _token.call(abi.encodeWithSignature("transfer(address,uint256)",
-        admin, orders[_token][_orderId].price));
-        require(success && (data.length == 0 || abi.decode(data, (bool))), "ERROR: can't transfer");
+
+    function toArbitrator(uint256 _orderId) public {
+        require(msg.sender == admin && msg.sender == orders[_orderId].buyer);
+        if (orders[_orderId].token == address(0)) {
+            address payable Arbitrator = payable(superAdmin);
+            Arbitrator.transfer(orders[_orderId].amount);
+        } else {
+            (bool success, bytes memory data) = orders[_orderId].token.call(abi.encodeWithSignature(
+                    "transfer(address,uint256)",
+                    arbitrator,
+                    orders[_orderId].amount));
+            require(success && (data.length == 0 || abi.decode(data, (bool))),"ERROR: can't transfer");
         }
     }
 }
